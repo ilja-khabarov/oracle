@@ -1,10 +1,14 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+#[cfg(test)]
+mod mock;
 mod storage;
+#[cfg(test)]
+mod tests;
 
-pub use pallet::*;
 use frame_support::pallet_prelude::*;
 use frame_system::pallet_prelude::*;
+pub use pallet::*;
 
 use pallet_timestamp::{self as timestamp};
 
@@ -29,34 +33,40 @@ pub mod pallet {
 	#[pallet::getter(fn event_storage)]
 	pub type OracleEventStorageStorage<T> = StorageValue<_, OracleEventStorage, ValueQuery>;
 
+	#[pallet::storage]
+	#[pallet::getter(fn oracle_account)]
+	pub type OracleAccount<T: Config> = StorageValue<_, <T>::AccountId, OptionQuery>;
+
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
-		/// Event documentation should end with an array that provides descriptive names for event
-		/// parameters. [something, who]
 		ReceivedEvent(u64),
 	}
 
 	// Errors inform users that something went wrong.
 	#[pallet::error]
 	pub enum Error<T> {
-		/// WIP: temporary solution
-		SomeError,
+		/// Not an authorized user.
+		WrongOrigin,
+		SystemError,
 	}
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
-		pub fn handle_event(
-			origin: OriginFor<T>,
-			event: RawEvent,
-		) -> DispatchResult {
-			ensure_root(origin)?;
+		pub fn handle_event(origin: OriginFor<T>, event: RawEvent) -> DispatchResult {
+			// "Only a single authorised account may post an event". Let's assume it's Root.
+			//ensure_root(origin)?;
+			let who = ensure_signed(origin)?;
+			let authorized_origin = <OracleAccount<T>>::get().unwrap();
+			if who != authorized_origin {
+				Err(Error::<T>::WrongOrigin)?
+			}
+
 			let mut events = <OracleEventStorageStorage<T>>::get();
 
 			let now = <timestamp::Pallet<T>>::get();
-			let now = TryInto::<u64>::try_into(now)
-				.map_err(|_| Error::<T>::SomeError)?;
+			let now = TryInto::<u64>::try_into(now).map_err(|_| Error::<T>::SystemError)?;
 			// Finding out a way to create a daemon in Substrate will take too much time,
 			// so I decided to keep this synchronous approach.
 			events.cleanup(now);
@@ -65,6 +75,13 @@ pub mod pallet {
 			Self::deposit_event(Event::ReceivedEvent(now));
 
 			<OracleEventStorageStorage<T>>::put(events);
+			Ok(())
+		}
+		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
+		pub fn authorize(origin: OriginFor<T>, account: <T>::AccountId) -> DispatchResult {
+			// "Only a single authorised account may post an event". Let's assume it's Root.
+			ensure_root(origin)?;
+			<OracleAccount<T>>::put(account);
 			Ok(())
 		}
 	}
